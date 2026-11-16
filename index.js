@@ -58,4 +58,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
+// Tiny HTTP endpoint so the bot can run as a free Render Web Service:
+// Render expects the service to listen on $PORT, and the uptime pinger
+// hits this URL every few minutes to keep the free instance awake.
+const http = require('http');
+if (process.env.PORT) {
+  http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('MW4 Camo Tracker bot is running.\n');
+  }).listen(process.env.PORT, () => {
+    console.log(`Health endpoint listening on port ${process.env.PORT}`);
+  });
+}
+
 client.login(config.discordToken);
