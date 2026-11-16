@@ -11,6 +11,11 @@
 //   profiles.discord_id       — set on the website when a user links
 //                               their Discord account to their web account
 //
+// Activision IDs live in their own table (supabase/migration-activision-ids.sql):
+//   activision_ids — one row per Discord user (discord_id PRIMARY KEY)
+//                    with their Activision ID and the username saved
+//                    at add time. Used by /activision add / list / remove.
+//
 // How sync works:
 //   - If the Discord user's ID is linked on a web profile
 //     (profiles.discord_id), the bot reads/writes rows with that
@@ -143,6 +148,46 @@ async function clearProgress(discordId) {
   if (error) throw error;
 }
 
+// Save (or update) a Discord user's Activision ID. The username is
+// stored alongside it so /activision list can show a name even if the
+// member later leaves the server or renames.
+async function upsertActivisionId(discordId, activisionId, username) {
+  const sb = requireClient();
+  const { error } = await sb.from('activision_ids').upsert(
+    {
+      discord_id: discordId,
+      activision_id: activisionId,
+      username,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'discord_id' }
+  );
+  if (error) throw error;
+}
+
+// Everyone who saved an Activision ID, ordered by username.
+async function listActivisionIds() {
+  const sb = requireClient();
+  const { data, error } = await sb
+    .from('activision_ids')
+    .select('discord_id,activision_id,username')
+    .order('username', { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+// Delete the caller's Activision ID. Returns true if a row was removed.
+async function removeActivisionId(discordId) {
+  const sb = requireClient();
+  const { data, error } = await sb
+    .from('activision_ids')
+    .delete()
+    .eq('discord_id', discordId)
+    .select('discord_id');
+  if (error) throw error;
+  return (data || []).length > 0;
+}
+
 module.exports = {
   client,
   configured: config.supabaseConfigured,
@@ -150,4 +195,7 @@ module.exports = {
   getProgress,
   setCamo,
   clearProgress,
+  upsertActivisionId,
+  listActivisionIds,
+  removeActivisionId,
 };
