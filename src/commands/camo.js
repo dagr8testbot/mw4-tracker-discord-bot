@@ -1,6 +1,6 @@
 // /camo [weapon] — the core command.
 // With a weapon: that weapon's camo checklist with tick buttons.
-// Without: overall progress + the full weapon list (paged).
+// Without: overall progress + the class list (pick a class, then a weapon).
 const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const sb = require('../supabase');
 const h = require('../helpers');
@@ -59,7 +59,7 @@ module.exports = {
       return;
     }
 
-    // No weapon: overall progress + full weapon list (page 0).
+    // No weapon: overall progress + the class list.
     let progress = new Set();
     if (sb.configured) {
       try {
@@ -70,7 +70,7 @@ module.exports = {
     }
     await interaction.reply({
       embeds: [h.progressEmbed(interaction.user.username, progress)],
-      components: h.weaponListRows(0, userId),
+      components: h.classListRows(userId),
       // Ephemeral: only the invoker sees their checklist.
       flags: MessageFlags.Ephemeral,
     });
