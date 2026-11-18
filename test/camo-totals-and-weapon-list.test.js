@@ -1,4 +1,5 @@
-// Mock tests: per-camo-type totals + paginated weapon list for /camo.
+// Mock tests: per-camo-type totals + class-grouped /camo navigation
+// (class list → class weapons → checklist, with Back collapsing up).
 // Run: node test/camo-totals-and-weapon-list.test.js
 // No Discord connection needed: interactions are exercised with mocks.
 // The Supabase module is stubbed in-process where a test needs it;
@@ -266,16 +267,177 @@ async function main() {
     assert.match(it.calls.replies[0].content, /not your checklist/);
   });
 
+  // ---- class list: 9 class buttons, 2 rows ----
+  await check('class list is 9 buttons in 2 rows, one per class', () => {
+    const rows = h.classListRows(OWNER);
+    assert.equal(rows.length, 2);
+    const btns = rows.flatMap((r) => r.toJSON().components);
+    assert.equal(btns.length, 9);
+    assert.deepEqual(
+      btns.map((b) => b.label),
+      h.data.classes
+    );
+    btns.forEach((b, i) => {
+      assert.equal(b.type, 2, 'button');
+      assert.equal(b.custom_id, `camo:class:${OWNER}:${i}`);
+    });
+  });
+
+  // ---- every class button resolves to exactly its weapons ----
+  await check('every class button opens exactly that class weapons, with Back to Classes', async () => {
+    for (let idx = 0; idx < h.data.classes.length; idx++) {
+      const it = mockInteraction({
+        customId: `camo:class:${OWNER}:${idx}`,
+        button: true,
+      });
+      await handle(it);
+      assert.equal(it.calls.updates.length, 1, `class ${idx}`);
+      const upd = it.calls.updates[0];
+      assert.ok(!('embeds' in upd), 'class view keeps the embed');
+      const select = upd.components[0].toJSON().components[0];
+      assert.equal(select.custom_id, `camo:weapon:${OWNER}:c${idx}`);
+      assert.deepEqual(
+        select.options.map((o) => o.value).sort(),
+        h.data.weapons
+          .filter((w) => w.class === h.data.classes[idx])
+          .map((w) => w.id)
+          .sort()
+      );
+      const back = upd.components[1].toJSON().components[0];
+      assert.equal(back.custom_id, `camo:back:classes:${OWNER}`);
+      assert.match(back.label, /Back to Classes/);
+    }
+  });
+
+  // ---- every weapon in every class opens its checklist, Back to its class ----
+  await check('every weapon in every class opens its checklist with Back to its class', async () => {
+    for (let idx = 0; idx < h.data.classes.length; idx++) {
+      for (const w of h.data.weapons.filter((x) => x.class === h.data.classes[idx])) {
+        const it = mockInteraction({
+          customId: `camo:weapon:${OWNER}:c${idx}`,
+          values: [w.id],
+        });
+        await handle(it);
+        assert.equal(it.calls.updates.length, 1, w.id);
+        const upd = it.calls.updates[0];
+        assert.equal(embedJson(upd.embeds[0]).title.split(' — ')[0], w.name);
+        const back = upd.components[2].toJSON().components[0];
+        assert.equal(back.custom_id, `camo:back:weapons:${OWNER}:c${idx}`);
+        assert.match(back.label, /Back to Weapons/);
+      }
+    }
+  });
+
+  // ---- Back from a checklist returns to its class's weapon list ----
+  await check('Back to Weapons from a class checklist returns to that class weapons', async () => {
+    const it = mockInteraction({
+      customId: `camo:back:weapons:${OWNER}:c2`,
+      button: true,
+    });
+    await handle(it);
+    assert.equal(it.calls.updates.length, 1);
+    const upd = it.calls.updates[0];
+    assert.match(embedJson(upd.embeds[0]).title, /camo progress/);
+    assert.equal(
+      upd.components[0].toJSON().components[0].custom_id,
+      `camo:weapon:${OWNER}:c2`
+    );
+  });
+
+  // ---- Back to Classes returns to the class list ----
+  await check('Back to Classes returns to the 9 class buttons', async () => {
+    const it = mockInteraction({
+      customId: `camo:back:classes:${OWNER}`,
+      button: true,
+    });
+    await handle(it);
+    assert.equal(it.calls.updates.length, 1);
+    const btns = it.calls.updates[0].components.flatMap((r) => r.toJSON().components);
+    assert.equal(btns.length, 9);
+    assert.equal(btns[0].custom_id, `camo:class:${OWNER}:0`);
+    assert.equal(btns[8].custom_id, `camo:class:${OWNER}:8`);
+  });
+
+  // ---- ownership lock applies to the new class components ----
+  await check("another user's click on a class button is rejected, nothing changes", async () => {
+    const it = mockInteraction({
+      customId: `camo:class:${OWNER}:0`,
+      button: true,
+      userId: OTHER,
+    });
+    await handle(it);
+    assert.equal(it.calls.updates.length, 0);
+    assert.equal(it.calls.replies.length, 1);
+    assert.match(it.calls.replies[0].content, /not your checklist/);
+  });
+
+  // ---- toggle keeps the class Back target ----
+  await check('ticking a camo from a class checklist keeps Back on its class', async () => {
+    const saved = { configured: sb.configured, getProgress: sb.getProgress, setCamos: sb.setCamos };
+    sb.configured = true;
+    const progress = new Set();
+    sb.getProgress = async () => ({ progress, linked: false });
+    let setArgs = null;
+    sb.setCamos = async (...a) => { setArgs = a; };
+    try {
+      const it = mockInteraction({
+        customId: `camo:toggle:${OWNER}:m4:special-1:c0`,
+        button: true,
+      });
+      await handle(it);
+      assert.equal(it.calls.updates.length, 1);
+      const upd = it.calls.updates[0];
+      assert.match(embedJson(upd.embeds[0]).title, /M4 — 1\/6 camos/);
+      const back = upd.components[2].toJSON().components[0];
+      assert.equal(back.custom_id, `camo:back:weapons:${OWNER}:c0`);
+      assert.deepEqual(setArgs, [OWNER, 'm4', ['special-1'], true]);
+    } finally {
+      sb.configured = saved.configured;
+      sb.getProgress = saved.getProgress;
+      sb.setCamos = saved.setCamos;
+    }
+  });
+
+  // ---- cascade ticking still works through the class flow ----
+  await check('cascade: unticked Platinum ticks specials+gold+platinum; ticked Gold unticks gold onward', async () => {
+    const saved = { configured: sb.configured, getProgress: sb.getProgress, setCamos: sb.setCamos };
+    sb.configured = true;
+    const empty = new Set();
+    const full = fullSet();
+    let current = empty;
+    sb.getProgress = async () => ({ progress: current, linked: false });
+    let setArgs = null;
+    sb.setCamos = async (...a) => { setArgs = a; };
+    try {
+      const it1 = mockInteraction({
+        customId: `camo:toggle:${OWNER}:m4:platinum:c0`,
+        button: true,
+      });
+      await handle(it1);
+      assert.deepEqual(setArgs, [OWNER, 'm4', ['special-1', 'special-2', 'special-3', 'gold', 'platinum'], true]);
+      assert.match(embedJson(it1.calls.updates[0].embeds[0]).title, /M4 — 5\/6 camos/);
+      current = full;
+      const it2 = mockInteraction({
+        customId: `camo:toggle:${OWNER}:m4:gold:c0`,
+        button: true,
+      });
+      await handle(it2);
+      assert.deepEqual(setArgs, [OWNER, 'm4', ['gold', 'platinum', 'harmonic'], false]);
+      assert.match(embedJson(it2.calls.updates[0].embeds[0]).title, /M4 — 3\/6 camos/);
+    } finally {
+      sb.configured = saved.configured;
+      sb.getProgress = saved.getProgress;
+      sb.setCamos = saved.setCamos;
+    }
+  });
+
   // ---- legacy pre-change components get the stale reply ----
-  await check('old class picker and Back to Classes get the stale reply', async () => {
+  await check('old class picker select gets the stale reply; owner-less Back to Classes too', async () => {
     const it1 = mockInteraction({ customId: `camo:class:${OWNER}` });
     await handle(it1);
     assert.equal(it1.calls.replies.length, 1);
     assert.match(it1.calls.replies[0].content, /before an update/);
-    const it2 = mockInteraction({
-      customId: `camo:back:classes:${OWNER}`,
-      button: true,
-    });
+    const it2 = mockInteraction({ customId: 'camo:back:classes', button: true });
     await handle(it2);
     assert.equal(it2.calls.replies.length, 1);
     assert.match(it2.calls.replies[0].content, /before an update/);
