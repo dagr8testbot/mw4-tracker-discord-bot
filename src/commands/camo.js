@@ -50,8 +50,11 @@ module.exports = {
       }
       await interaction.reply({
         embeds: [h.camoEmbed(weapon, progress)],
-        components: h.camoButtons(weapon, progress),
+        components: h.camoButtons(weapon, progress, userId),
         content: note || undefined,
+        // Ephemeral: only the invoker sees their checklist, so nobody
+        // else can even see (let alone click) its buttons.
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -67,7 +70,9 @@ module.exports = {
     }
     await interaction.reply({
       embeds: [h.progressEmbed(interaction.user.username, progress)],
-      components: [h.classSelectRow()],
+      components: [h.classSelectRow(userId)],
+      // Ephemeral: only the invoker sees their checklist.
+      flags: MessageFlags.Ephemeral,
     });
   },
 };
