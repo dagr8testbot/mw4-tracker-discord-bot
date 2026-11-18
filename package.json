@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node index.js",
     "deploy": "node deploy-commands.js",
-    "sync-data": "node tools/sync_data.js"
+    "sync-data": "node tools/sync_data.js",
+    "test": "node test/camo-totals-and-weapon-list.test.js"
   },
   "keywords": [],
   "author": "",
