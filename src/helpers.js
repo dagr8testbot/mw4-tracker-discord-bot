@@ -78,7 +78,12 @@ function camoEmbed(weapon, progress) {
 }
 
 // One button per camo (6 max = 2 rows of 3). Green = done, grey = not done.
-function camoButtons(weapon, progress) {
+// Plus a Back row so the user can return to the weapon picker for this
+// weapon's class without re-running /camo.
+// Every customId carries the owner's Discord user id
+// (camo:toggle:<ownerId>:... / camo:back:weapons:<ownerId>:...) so the
+// handler can reject clicks from anyone else.
+function camoButtons(weapon, progress, ownerId) {
   const rows = [];
   for (let i = 0; i < weapon.camos.length; i += 3) {
     const row = new ActionRowBuilder();
@@ -86,21 +91,39 @@ function camoButtons(weapon, progress) {
       const done = progress.has(`${weapon.id}:${c.id}`);
       row.addComponents(
         new ButtonBuilder()
-          .setCustomId(`camo:toggle:${weapon.id}:${c.id}`)
+          .setCustomId(`camo:toggle:${ownerId}:${weapon.id}:${c.id}`)
           .setLabel(`${done ? CHECK : BOX} ${c.name}`)
           .setStyle(done ? ButtonStyle.Success : ButtonStyle.Secondary)
       );
     });
     rows.push(row);
   }
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`camo:back:weapons:${ownerId}:${weapon.class}`)
+        .setLabel('← Back to Weapons')
+        .setStyle(ButtonStyle.Secondary)
+    )
+  );
   return rows;
 }
 
+// Back row for the weapon picker: returns to the class picker.
+function backToClassesRow(ownerId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`camo:back:classes:${ownerId}`)
+      .setLabel('← Back to Classes')
+      .setStyle(ButtonStyle.Secondary)
+  );
+}
+
 // Class picker (first step when /camo has no weapon).
-function classSelectRow() {
+function classSelectRow(ownerId) {
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId('camo:class')
+      .setCustomId(`camo:class:${ownerId}`)
       .setPlaceholder('Pick a class…')
       .addOptions(
         data.classes.map((c) => ({ label: c, value: c }))
@@ -109,10 +132,10 @@ function classSelectRow() {
 }
 
 // Weapon picker for one class (second step).
-function weaponSelectRow(cls) {
+function weaponSelectRow(cls, ownerId) {
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId(`camo:weapon:${cls}`)
+      .setCustomId(`camo:weapon:${ownerId}:${cls}`)
       .setPlaceholder('Pick a weapon…')
       .addOptions(
         data.weapons
@@ -249,6 +272,7 @@ module.exports = {
   totalDone,
   camoEmbed,
   camoButtons,
+  backToClassesRow,
   classSelectRow,
   weaponSelectRow,
   progressEmbed,
