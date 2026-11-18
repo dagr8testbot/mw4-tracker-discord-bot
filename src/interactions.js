@@ -60,8 +60,18 @@ async function handleToggle(interaction) {
     const { progress } = await sb.getProgress(interaction.user.id);
     const key = `${weaponId}:${camoId}`;
     const done = !progress.has(key);
-    await sb.setCamo(interaction.user.id, weaponId, camoId, done);
-    if (done) progress.add(key); else progress.delete(key);
+    // Cascade in unlock order (special-1 → special-2 → special-3 →
+    // gold → platinum → harmonic, the order of weapon.camos in data.js):
+    // tapping an unticked camo completes it and everything before it
+    // (you can't hold Platinum without Gold); tapping a ticked camo
+    // removes it and everything after it. Earlier camos stay ticked.
+    const idx = weapon.camos.findIndex((c) => c.id === camoId);
+    const affected = done ? weapon.camos.slice(0, idx + 1) : weapon.camos.slice(idx);
+    await sb.setCamos(interaction.user.id, weaponId, affected.map((c) => c.id), done);
+    affected.forEach((c) => {
+      const k = `${weaponId}:${c.id}`;
+      if (done) progress.add(k); else progress.delete(k);
+    });
     await interaction.update({
       embeds: [h.camoEmbed(weapon, progress)],
       components: h.camoButtons(weapon, progress, interaction.user.id),

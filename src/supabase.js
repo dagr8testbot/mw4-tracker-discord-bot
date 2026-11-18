@@ -136,6 +136,37 @@ async function setCamo(discordId, weaponId, camoId, done) {
   return done;
 }
 
+// Tick (done=true) or un-tick (done=false) several camos of one weapon
+// at once — the /camo cascade (tapping a camo completes / clears the
+// rest of its unlock chain). Resolves the identity once and writes the
+// whole batch in a single upsert / delete.
+async function setCamos(discordId, weaponId, camoIds, done) {
+  const sb = requireClient();
+  const id = await resolveIdentity(discordId);
+  const base = id.mode === 'linked'
+    ? { user_id: id.userId }
+    : { discord_id: id.discordId };
+  const conflict = id.mode === 'linked'
+    ? 'user_id,weapon_id,camo_id'
+    : 'discord_id,weapon_id,camo_id';
+  if (done) {
+    const rows = camoIds.map((camoId) => ({
+      ...base, weapon_id: weaponId, camo_id: camoId, completed: true,
+    }));
+    const { error } = await sb.from('camo_progress').upsert(rows, { onConflict: conflict });
+    if (error) throw error;
+  } else {
+    let query = sb.from('camo_progress').delete()
+      .eq('weapon_id', weaponId).in('camo_id', camoIds);
+    query = id.mode === 'linked'
+      ? query.eq('user_id', id.userId)
+      : query.eq('discord_id', id.discordId);
+    const { error } = await query;
+    if (error) throw error;
+  }
+  return done;
+}
+
 // Delete all of the user's progress (used by the reset button).
 async function clearProgress(discordId) {
   const sb = requireClient();
@@ -194,6 +225,7 @@ module.exports = {
   findLinkedUserId,
   getProgress,
   setCamo,
+  setCamos,
   clearProgress,
   upsertActivisionId,
   listActivisionIds,
