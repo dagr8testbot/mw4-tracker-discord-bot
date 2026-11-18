@@ -72,9 +72,14 @@ async function handleToggle(interaction) {
       const k = `${weaponId}:${c.id}`;
       if (done) progress.add(k); else progress.delete(k);
     });
+    // The page travels in the toggle customId
+    // (camo:toggle:<ownerId>:<weaponId>:<camoId>:<page>) so Back
+    // returns to the same list page; pre-change buttons have no page
+    // and fall back to page 0.
+    const page = h.clampPage(parts[5]);
     await interaction.update({
       embeds: [h.camoEmbed(weapon, progress)],
-      components: h.camoButtons(weapon, progress, interaction.user.id),
+      components: h.camoButtons(weapon, progress, interaction.user.id, page),
     });
   } catch (e) {
     console.error('toggle failed:', e);
@@ -85,30 +90,15 @@ async function handleToggle(interaction) {
   }
 }
 
-async function handleClassSelect(interaction) {
-  // customId: camo:class:<ownerId> — value is the class name.
-  if (!(await checkOwner(interaction, interaction.customId.split(':')[2]))) return;
-  const cls = interaction.values[0];
-  await interaction.update({
-    components: [h.weaponSelectRow(cls, interaction.user.id), h.backToClassesRow(interaction.user.id)],
-  });
-}
-
 async function handleBackToWeapons(interaction) {
-  // customId: camo:back:weapons:<ownerId>:<class> — back from a
-  // weapon's camo checklist to the weapon picker for the same class.
-  // Restores the progress embed (refreshed, so ticks just made show
-  // up) — the same view the class picker led to.
+  // customId: camo:back:weapons:<ownerId>:<page> — back from a
+  // weapon's camo checklist to the full weapon list, on the same
+  // page the checklist was opened from. Pre-change buttons carry a
+  // class name in the page slot instead; clampPage turns that into
+  // page 0, so they still land on the list.
   const parts = interaction.customId.split(':');
   if (!(await checkOwner(interaction, parts[3]))) return;
-  const cls = parts.slice(4).join(':');
-  if (!h.data.classes.includes(cls)) {
-    await interaction.reply({
-      content: 'That class no longer exists — try /camo again.',
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
+  const page = h.clampPage(parts[4]);
   let progress = new Set();
   if (sb.configured) {
     try {
@@ -119,25 +109,36 @@ async function handleBackToWeapons(interaction) {
   }
   await interaction.update({
     embeds: [h.progressEmbed(interaction.user.username, progress)],
-    components: [h.weaponSelectRow(cls, interaction.user.id), h.backToClassesRow(interaction.user.id)],
+    components: h.weaponListRows(page, interaction.user.id),
   });
 }
 
-async function handleBackToClasses(interaction) {
-  // customId: camo:back:classes:<ownerId> — back from the weapon
-  // picker to the class picker. The embed is already the progress
-  // embed on every path that can reach the weapon picker, so only the
-  // components change.
-  if (!(await checkOwner(interaction, interaction.customId.split(':')[3]))) return;
+async function handlePage(interaction) {
+  // customId: camo:page:<ownerId>:<page> — Prev/Next on the weapon
+  // list. Only the components change; the embed stays the progress
+  // embed.
+  const parts = interaction.customId.split(':');
+  if (!(await checkOwner(interaction, parts[2]))) return;
+  const page = h.clampPage(parts[3]);
   await interaction.update({
-    components: [h.classSelectRow(interaction.user.id)],
+    components: h.weaponListRows(page, interaction.user.id),
   });
+}
+
+// Components from before the weapon-list change (class picker and
+// "Back to Classes") have no handler any more; tell the user to
+// re-run /camo instead of leaving the click unanswered.
+async function handleLegacy(interaction) {
+  await interaction.reply({ content: STALE, flags: MessageFlags.Ephemeral });
 }
 
 async function handleWeaponSelect(interaction) {
-  // customId: camo:weapon:<ownerId>:<class> — value is the weapon id.
+  // customId: camo:weapon:<ownerId>:<page> — value is the weapon id.
+  // Pre-change selects carry a class name in the page slot instead;
+  // clampPage turns that into page 0, so they still open the weapon.
   const parts = interaction.customId.split(':');
   if (!(await checkOwner(interaction, parts[2]))) return;
+  const page = h.clampPage(parts[3]);
   const weapon = h.weaponById(interaction.values[0]);
   if (!weapon) {
     await interaction.reply({
@@ -156,7 +157,7 @@ async function handleWeaponSelect(interaction) {
   }
   await interaction.update({
     embeds: [h.camoEmbed(weapon, progress)],
-    components: h.camoButtons(weapon, progress, interaction.user.id),
+    components: h.camoButtons(weapon, progress, interaction.user.id, page),
   });
 }
 
@@ -165,10 +166,12 @@ async function handle(interaction) {
     await handleToggle(interaction);
   } else if (interaction.isButton() && interaction.customId.startsWith('camo:back:weapons:')) {
     await handleBackToWeapons(interaction);
+  } else if (interaction.isButton() && interaction.customId.startsWith('camo:page:')) {
+    await handlePage(interaction);
   } else if (interaction.isButton() && interaction.customId.startsWith('camo:back:classes')) {
-    await handleBackToClasses(interaction);
+    await handleLegacy(interaction);
   } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith('camo:class')) {
-    await handleClassSelect(interaction);
+    await handleLegacy(interaction);
   } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith('camo:weapon:')) {
     await handleWeaponSelect(interaction);
   }

@@ -54,6 +54,40 @@ function totalDone(progress) {
   return progress.size;
 }
 
+// ---- per-camo-type totals ----
+
+// Maxima are computed from data.js (37 weapons × special-1/2/3, gold,
+// platinum, harmonic = 111/37/37/37), never hardcoded, so they stay
+// correct if weapons or camos are added later. Progress keys are
+// "weaponId:camoId"; weapon ids never contain ':', so the camo id is
+// everything after the first ':'.
+const CAMO_TYPES = [
+  { key: 'special', label: 'Specials', ids: ['special-1', 'special-2', 'special-3'] },
+  { key: 'gold', label: 'Gold', ids: ['gold'] },
+  { key: 'platinum', label: 'Platinum', ids: ['platinum'] },
+  { key: 'harmonic', label: 'Harmonic', ids: ['harmonic'] },
+];
+
+function typeBreakdown(progress) {
+  return CAMO_TYPES.map((t) => {
+    const total = data.weapons.reduce(
+      (n, w) => n + w.camos.filter((c) => t.ids.includes(c.id)).length,
+      0
+    );
+    let done = 0;
+    for (const key of progress) {
+      if (t.ids.includes(key.slice(key.indexOf(':') + 1))) done += 1;
+    }
+    return { key: t.key, label: t.label, done, total };
+  });
+}
+
+function typeBreakdownLine(progress) {
+  return typeBreakdown(progress)
+    .map((t) => `${t.label} ${t.done}/${t.total}`)
+    .join(' · ');
+}
+
 function tierEmoji(tier) {
   return { META: '🔴', A: '🟠', B: '🟡', C: '🟢', D: '⚪' }[tier] || '▫️';
 }
@@ -70,7 +104,8 @@ function camoEmbed(weapon, progress) {
     .setTitle(`${weapon.name} — ${done}/${weapon.camos.length} camos`)
     .setDescription(
       `*${weapon.class}*${weapon.season === 1 ? ` · Season 1 — ${weapon.unlock}` : ''}\n\n` +
-      lines.join('\n')
+      lines.join('\n') +
+      `\n\n**Your totals:** ${typeBreakdownLine(progress)}`
     )
     .setColor(done === weapon.camos.length ? 0x2ecc71 : 0xf1c40f);
   if (weapon.note) embed.setFooter({ text: `⚠️ ${weapon.note}` });
@@ -78,12 +113,14 @@ function camoEmbed(weapon, progress) {
 }
 
 // One button per camo (6 max = 2 rows of 3). Green = done, grey = not done.
-// Plus a Back row so the user can return to the weapon picker for this
-// weapon's class without re-running /camo.
+// Plus a Back row so the user can return to the full weapon list
+// without re-running /camo.
 // Every customId carries the owner's Discord user id
 // (camo:toggle:<ownerId>:... / camo:back:weapons:<ownerId>:...) so the
-// handler can reject clicks from anyone else.
-function camoButtons(weapon, progress, ownerId) {
+// handler can reject clicks from anyone else. The toggle and Back
+// customIds also carry the weapon-list page the checklist was opened
+// from, so Back returns to the same page.
+function camoButtons(weapon, progress, ownerId, page = 0) {
   const rows = [];
   for (let i = 0; i < weapon.camos.length; i += 3) {
     const row = new ActionRowBuilder();
@@ -91,7 +128,7 @@ function camoButtons(weapon, progress, ownerId) {
       const done = progress.has(`${weapon.id}:${c.id}`);
       row.addComponents(
         new ButtonBuilder()
-          .setCustomId(`camo:toggle:${ownerId}:${weapon.id}:${c.id}`)
+          .setCustomId(`camo:toggle:${ownerId}:${weapon.id}:${c.id}:${page}`)
           .setLabel(`${done ? CHECK : BOX} ${c.name}`)
           .setStyle(done ? ButtonStyle.Success : ButtonStyle.Secondary)
       );
@@ -101,7 +138,7 @@ function camoButtons(weapon, progress, ownerId) {
   rows.push(
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`camo:back:weapons:${ownerId}:${weapon.class}`)
+        .setCustomId(`camo:back:weapons:${ownerId}:${page}`)
         .setLabel('← Back to Weapons')
         .setStyle(ButtonStyle.Secondary)
     )
@@ -109,44 +146,62 @@ function camoButtons(weapon, progress, ownerId) {
   return rows;
 }
 
-// Back row for the weapon picker: returns to the class picker.
-function backToClassesRow(ownerId) {
+// ---- Full weapon list (first step when /camo has no weapon) ----
+//
+// One select menu holds max 25 options and one message holds max 5
+// action rows, so the 37 weapons are paged: 25 on page 0, 12 on
+// page 1, with Prev/Next buttons to move between them.
+const WEAPONS_PER_PAGE = 25;
+
+function weaponPageCount() {
+  return Math.max(1, Math.ceil(data.weapons.length / WEAPONS_PER_PAGE));
+}
+
+function clampPage(page) {
+  const n = Number.parseInt(page, 10);
+  if (Number.isNaN(n)) return 0;
+  return Math.min(Math.max(n, 0), weaponPageCount() - 1);
+}
+
+// One page of the weapon list: a select menu + Prev/Next buttons.
+function weaponSelectRow(page, ownerId) {
+  const p = clampPage(page);
+  const start = p * WEAPONS_PER_PAGE;
+  const ws = data.weapons.slice(start, start + WEAPONS_PER_PAGE);
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`camo:weapon:${ownerId}:${p}`)
+      .setPlaceholder(`Pick a weapon… (page ${p + 1}/${weaponPageCount()})`)
+      .addOptions(
+        ws.map((w) => ({
+          label: w.name,
+          value: w.id,
+          description: w.season === 1 ? `Season 1 — ${w.unlock}` : w.class,
+        }))
+      )
+  );
+}
+
+function weaponListNavRow(page, ownerId) {
+  const p = clampPage(page);
+  const last = weaponPageCount() - 1;
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`camo:back:classes:${ownerId}`)
-      .setLabel('← Back to Classes')
+      .setCustomId(`camo:page:${ownerId}:${p - 1}`)
+      .setLabel('← Prev')
       .setStyle(ButtonStyle.Secondary)
+      .setDisabled(p === 0),
+    new ButtonBuilder()
+      .setCustomId(`camo:page:${ownerId}:${p + 1}`)
+      .setLabel('Next →')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(p === last)
   );
 }
 
-// Class picker (first step when /camo has no weapon).
-function classSelectRow(ownerId) {
-  return new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId(`camo:class:${ownerId}`)
-      .setPlaceholder('Pick a class…')
-      .addOptions(
-        data.classes.map((c) => ({ label: c, value: c }))
-      )
-  );
-}
-
-// Weapon picker for one class (second step).
-function weaponSelectRow(cls, ownerId) {
-  return new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId(`camo:weapon:${ownerId}:${cls}`)
-      .setPlaceholder('Pick a weapon…')
-      .addOptions(
-        data.weapons
-          .filter((w) => w.class === cls)
-          .map((w) => ({
-            label: w.name,
-            value: w.id,
-            description: w.season === 1 ? `Season 1 — ${w.unlock}` : w.class,
-          }))
-      )
-  );
+// Both rows of the weapon list view for one page.
+function weaponListRows(page, ownerId) {
+  return [weaponSelectRow(page, ownerId), weaponListNavRow(page, ownerId)];
 }
 
 // Overall progress embed (for /camo with no weapon, and /progress).
@@ -162,6 +217,7 @@ function progressEmbed(username, progress) {
   return new EmbedBuilder()
     .setTitle(`🎯 ${username}'s camo progress — ${done}/${TOTAL_CAMOS}`)
     .setDescription(lines.join('\n'))
+    .addFields({ name: 'By camo type', value: typeBreakdownLine(progress) })
     .setColor(0xf1c40f)
     .setFooter({ text: 'Use /camo to open a weapon and tick camos off.' });
 }
@@ -264,17 +320,22 @@ function updatesEmbed() {
 
 module.exports = {
   TOTAL_CAMOS,
+  WEAPONS_PER_PAGE,
   data,
   weaponById,
   findWeapon,
   weaponChoices,
   weaponDoneCount,
   totalDone,
+  typeBreakdown,
+  typeBreakdownLine,
+  weaponPageCount,
+  clampPage,
   camoEmbed,
   camoButtons,
-  backToClassesRow,
-  classSelectRow,
   weaponSelectRow,
+  weaponListNavRow,
+  weaponListRows,
   progressEmbed,
   loadoutEmbed,
   metaEmbed,
