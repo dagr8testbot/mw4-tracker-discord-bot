@@ -113,14 +113,15 @@ function camoEmbed(weapon, progress) {
 }
 
 // One button per camo (6 max = 2 rows of 3). Green = done, grey = not done.
-// Plus a Back row so the user can return to the full weapon list
-// without re-running /camo.
+// Plus a Back row so the user can return to the view the checklist was
+// opened from without re-running /camo.
 // Every customId carries the owner's Discord user id
 // (camo:toggle:<ownerId>:... / camo:back:weapons:<ownerId>:...) so the
 // handler can reject clicks from anyone else. The toggle and Back
-// customIds also carry the weapon-list page the checklist was opened
-// from, so Back returns to the same page.
-function camoButtons(weapon, progress, ownerId, page = 0) {
+// customIds also carry a back token so Back returns to the same view:
+// 'classes' → the class list, 'c<idx>' → that class's weapon list,
+// '<n>' → page n of the legacy flat weapon list.
+function camoButtons(weapon, progress, ownerId, back = 'classes') {
   const rows = [];
   for (let i = 0; i < weapon.camos.length; i += 3) {
     const row = new ActionRowBuilder();
@@ -128,7 +129,7 @@ function camoButtons(weapon, progress, ownerId, page = 0) {
       const done = progress.has(`${weapon.id}:${c.id}`);
       row.addComponents(
         new ButtonBuilder()
-          .setCustomId(`camo:toggle:${ownerId}:${weapon.id}:${c.id}:${page}`)
+          .setCustomId(`camo:toggle:${ownerId}:${weapon.id}:${c.id}:${back}`)
           .setLabel(`${done ? CHECK : BOX} ${c.name}`)
           .setStyle(done ? ButtonStyle.Success : ButtonStyle.Secondary)
       );
@@ -138,8 +139,8 @@ function camoButtons(weapon, progress, ownerId, page = 0) {
   rows.push(
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`camo:back:weapons:${ownerId}:${page}`)
-        .setLabel('← Back to Weapons')
+        .setCustomId(`camo:back:weapons:${ownerId}:${back}`)
+        .setLabel(back === 'classes' ? '← Back to Classes' : '← Back to Weapons')
         .setStyle(ButtonStyle.Secondary)
     )
   );
@@ -202,6 +203,85 @@ function weaponListNavRow(page, ownerId) {
 // Both rows of the weapon list view for one page.
 function weaponListRows(page, ownerId) {
   return [weaponSelectRow(page, ownerId), weaponListNavRow(page, ownerId)];
+}
+
+// ---- Class-grouped navigation (first step of /camo) ----
+//
+// /camo opens on the class list: one button per class (9 buttons,
+// 2 rows of 5 + 4). Tapping a class edits the message in place to
+// show that class's weapons; tapping a weapon opens its checklist.
+// Back buttons collapse back up: checklist → weapon list for its
+// class, weapon list → class list.
+//
+// Back tokens (carried in toggle/Back customIds, see camoButtons):
+// 'classes' → the class list, 'c<idx>' → that class's weapon list,
+// '<n>' → page n of the legacy flat weapon list.
+function clampClass(idx) {
+  const n = Number.parseInt(idx, 10);
+  if (Number.isNaN(n)) return 0;
+  return Math.min(Math.max(n, 0), data.classes.length - 1);
+}
+
+function classAt(idx) {
+  return data.classes[clampClass(idx)];
+}
+
+function weaponsInClass(idx) {
+  const cls = classAt(idx);
+  return data.weapons.filter((w) => w.class === cls);
+}
+
+function parseBackToken(token) {
+  if (token === 'classes' || token === undefined || token === null || token === '') {
+    return { kind: 'classes' };
+  }
+  const t = String(token);
+  if (/^c\d+$/.test(t)) return { kind: 'class', index: clampClass(t.slice(1)) };
+  return { kind: 'page', page: clampPage(t) };
+}
+
+// The class list: one button per class.
+function classListRows(ownerId) {
+  const rows = [];
+  for (let i = 0; i < data.classes.length; i += 5) {
+    const row = new ActionRowBuilder();
+    data.classes.slice(i, i + 5).forEach((cls, j) => {
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`camo:class:${ownerId}:${i + j}`)
+          .setLabel(cls)
+          .setStyle(ButtonStyle.Secondary)
+      );
+    });
+    rows.push(row);
+  }
+  return rows;
+}
+
+// One class's weapons: a select menu + a Back to Classes button.
+function classWeaponRows(clsIdx, ownerId) {
+  const idx = clampClass(clsIdx);
+  const cls = data.classes[idx];
+  const ws = weaponsInClass(idx);
+  const select = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`camo:weapon:${ownerId}:c${idx}`)
+      .setPlaceholder(`Pick a weapon… (${cls})`)
+      .addOptions(
+        ws.map((w) => ({
+          label: w.name,
+          value: w.id,
+          ...(w.season === 1 ? { description: `Season 1 — ${w.unlock}` } : {}),
+        }))
+      )
+  );
+  const back = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`camo:back:classes:${ownerId}`)
+      .setLabel('← Back to Classes')
+      .setStyle(ButtonStyle.Secondary)
+  );
+  return [select, back];
 }
 
 // Overall progress embed (for /camo with no weapon, and /progress).
@@ -331,6 +411,12 @@ module.exports = {
   typeBreakdownLine,
   weaponPageCount,
   clampPage,
+  clampClass,
+  classAt,
+  weaponsInClass,
+  parseBackToken,
+  classListRows,
+  classWeaponRows,
   camoEmbed,
   camoButtons,
   weaponSelectRow,

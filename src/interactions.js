@@ -72,14 +72,16 @@ async function handleToggle(interaction) {
       const k = `${weaponId}:${c.id}`;
       if (done) progress.add(k); else progress.delete(k);
     });
-    // The page travels in the toggle customId
-    // (camo:toggle:<ownerId>:<weaponId>:<camoId>:<page>) so Back
-    // returns to the same list page; pre-change buttons have no page
-    // and fall back to page 0.
-    const page = h.clampPage(parts[5]);
+    // The back token travels in the toggle customId
+    // (camo:toggle:<ownerId>:<weaponId>:<camoId>:<back>) so Back
+    // returns to the view the checklist was opened from: 'classes',
+    // 'c<idx>' for a class's weapon list, or a page number for the
+    // legacy flat list. Pre-change buttons have no token and fall
+    // back to the class list.
+    const back = parts[5] || 'classes';
     await interaction.update({
       embeds: [h.camoEmbed(weapon, progress)],
-      components: h.camoButtons(weapon, progress, interaction.user.id, page),
+      components: h.camoButtons(weapon, progress, interaction.user.id, back),
     });
   } catch (e) {
     console.error('toggle failed:', e);
@@ -91,14 +93,14 @@ async function handleToggle(interaction) {
 }
 
 async function handleBackToWeapons(interaction) {
-  // customId: camo:back:weapons:<ownerId>:<page> — back from a
-  // weapon's camo checklist to the full weapon list, on the same
-  // page the checklist was opened from. Pre-change buttons carry a
-  // class name in the page slot instead; clampPage turns that into
-  // page 0, so they still land on the list.
+  // customId: camo:back:weapons:<ownerId>:<back> — back from a
+  // weapon's camo checklist. The back token says where to land:
+  // 'classes' → the class list, 'c<idx>' → that class's weapon
+  // list, '<n>' → page n of the legacy flat weapon list (a class
+  // name there clamps to page 0, as before).
   const parts = interaction.customId.split(':');
   if (!(await checkOwner(interaction, parts[3]))) return;
-  const page = h.clampPage(parts[4]);
+  const back = h.parseBackToken(parts[4]);
   let progress = new Set();
   if (sb.configured) {
     try {
@@ -107,9 +109,39 @@ async function handleBackToWeapons(interaction) {
       console.error('getProgress failed:', e);
     }
   }
+  const components =
+    back.kind === 'classes'
+      ? h.classListRows(interaction.user.id)
+      : back.kind === 'class'
+        ? h.classWeaponRows(back.index, interaction.user.id)
+        : h.weaponListRows(back.page, interaction.user.id);
   await interaction.update({
     embeds: [h.progressEmbed(interaction.user.username, progress)],
-    components: h.weaponListRows(page, interaction.user.id),
+    components,
+  });
+}
+
+async function handleClass(interaction) {
+  // customId: camo:class:<ownerId>:<classIdx> — a class button on
+  // the class list. Edits the message in place to show that class's
+  // weapons; the embed stays the progress embed.
+  const parts = interaction.customId.split(':');
+  if (!(await checkOwner(interaction, parts[2]))) return;
+  const idx = h.clampClass(parts[3]);
+  await interaction.update({
+    components: h.classWeaponRows(idx, interaction.user.id),
+  });
+}
+
+async function handleBackToClasses(interaction) {
+  // customId: camo:back:classes:<ownerId> — back from a class's
+  // weapon list to the class list. Buttons from before ownership
+  // encoding carry no owner id and get the stale reply from
+  // checkOwner instead of landing anywhere.
+  const parts = interaction.customId.split(':');
+  if (!(await checkOwner(interaction, parts[3]))) return;
+  await interaction.update({
+    components: h.classListRows(interaction.user.id),
   });
 }
 
@@ -125,20 +157,25 @@ async function handlePage(interaction) {
   });
 }
 
-// Components from before the weapon-list change (class picker and
-// "Back to Classes") have no handler any more; tell the user to
-// re-run /camo instead of leaving the click unanswered.
+// Components from before the class-list change that have no
+// handler any more — the old class-picker select menus (the new
+// class list uses buttons) and owner-less Back to Classes buttons —
+// tell the user to re-run /camo instead of leaving the click
+// unanswered.
 async function handleLegacy(interaction) {
   await interaction.reply({ content: STALE, flags: MessageFlags.Ephemeral });
 }
 
 async function handleWeaponSelect(interaction) {
-  // customId: camo:weapon:<ownerId>:<page> — value is the weapon id.
-  // Pre-change selects carry a class name in the page slot instead;
-  // clampPage turns that into page 0, so they still open the weapon.
+  // customId: camo:weapon:<ownerId>:<back> — value is the weapon id.
+  // The back token is 'c<idx>' for a class's weapon list, or a page
+  // number for the legacy flat list; it travels into the checklist
+  // so Back returns to the same view. A class name in the slot (very
+  // old buttons) clamps to page 0, as before.
   const parts = interaction.customId.split(':');
   if (!(await checkOwner(interaction, parts[2]))) return;
-  const page = h.clampPage(parts[3]);
+  const token = parts[3] || 'classes';
+  const back = /^c\d+$/.test(token) ? token : String(h.clampPage(token));
   const weapon = h.weaponById(interaction.values[0]);
   if (!weapon) {
     await interaction.reply({
@@ -157,7 +194,7 @@ async function handleWeaponSelect(interaction) {
   }
   await interaction.update({
     embeds: [h.camoEmbed(weapon, progress)],
-    components: h.camoButtons(weapon, progress, interaction.user.id, page),
+    components: h.camoButtons(weapon, progress, interaction.user.id, back),
   });
 }
 
@@ -166,6 +203,10 @@ async function handle(interaction) {
     await handleToggle(interaction);
   } else if (interaction.isButton() && interaction.customId.startsWith('camo:back:weapons:')) {
     await handleBackToWeapons(interaction);
+  } else if (interaction.isButton() && interaction.customId.startsWith('camo:class:')) {
+    await handleClass(interaction);
+  } else if (interaction.isButton() && interaction.customId.startsWith('camo:back:classes:')) {
+    await handleBackToClasses(interaction);
   } else if (interaction.isButton() && interaction.customId.startsWith('camo:page:')) {
     await handlePage(interaction);
   } else if (interaction.isButton() && interaction.customId.startsWith('camo:back:classes')) {
